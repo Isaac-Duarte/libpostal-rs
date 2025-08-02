@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Isaac Duarte <isaac@elektrikapp.com>"]
 description = "Static Rust bindings for libpostal - international address parsing and normalization"
 repository = "https://github.com/Isaac-Duarte/libpostal-rs"
+license = "MIT OR Apache-2.0"
 keywords = ["libpostal", "address", "parsing", "normalization", "geocoding"]
 categories = ["text-processing", "internationalization", "api-bindings"]
 readme = "README.md"
