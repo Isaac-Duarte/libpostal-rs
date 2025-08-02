@@ -1,0 +1,61 @@
+[package]
+name = "libpostal-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Isaac Duarte <isaac@elektrikapp.com>"]
+description = "Static Rust bindings for libpostal - international address parsing and normalization"
+repository = "https://github.com/Isaac-Duarte/libpostal-rs"
+keywords = ["libpostal", "address", "parsing", "normalization", "geocoding"]
+categories = ["text-processing", "internationalization", "api-bindings"]
+readme = "README.md"
+documentation = "https://docs.rs/libpostal-rs"
+
+[features]
+default = ["runtime-data"]
+runtime-data = ["dep:reqwest", "dep:tar", "dep:flate2"]
+bundled-data = []
+serde = ["dep:serde"]
+parallel = ["dep:rayon"]
+docs-rs = [] # Feature for documentation builds
+
+[dependencies]
+# Core dependencies for FFI and error handling
+libc = "0.2"
+thiserror = "1.0"
+dirs = "5.0"
+
+# Optional dependencies
+serde = { version = "1.0", features = ["derive"], optional = true }
+tokio = { version = "1.0", features = ["rt", "fs", "net"] }
+rayon = { version = "1.8", optional = true }
+
+# Dependencies for runtime data downloads
+reqwest = { version = "0.11", features = ["stream"], optional = true }
+tar = { version = "0.4", optional = true }
+flate2 = { version = "1.0", optional = true }
+
+[build-dependencies]
+# Build system dependencies
+bindgen = "0.70"
+cc = "1.0"
+pkg-config = "0.3"
+reqwest = { version = "0.11", features = ["blocking"] }
+sha2 = "0.10"
+tar = "0.4"
+flate2 = "1.0"
+
+[dev-dependencies]
+# Testing and development
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
+tokio-test = "0.4"
+tempfile = "3.0"
+assert_matches = "1.5"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parsing_benchmarks"
+harness = false
+
+[[bench]]
+name = "simple_bench"
+harness = false

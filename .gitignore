@@ -1,0 +1,43 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+/build/
+/dist/
+
+# libpostal data
+/.libpostal-rs/
+/libpostal-data/
+data/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Coverage
+/coverage/
+lcov.info
+*.profraw
+
+# Documentation
+/doc/
+
+# Temporary files
+*.tmp
+*.temp
