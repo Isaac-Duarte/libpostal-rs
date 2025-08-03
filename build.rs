@@ -49,6 +49,9 @@ fn main() {
     // Generate bindings
     generate_bindings_with_include(&out_dir, &install_dir);
 
+    // Copy libpostal_data executable to a more accessible location
+    copy_libpostal_data_executable(&install_dir, &out_dir);
+
     println!("cargo:warning=libpostal build completed successfully");
 }
 
@@ -395,4 +398,37 @@ fn apply_libpostal_patches(libpostal_dir: &Path) -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+/// Copy the libpostal_data executable to a more accessible location
+fn copy_libpostal_data_executable(install_dir: &Path, out_dir: &Path) {
+    let source_path = install_dir.join("bin/libpostal_data");
+    
+    if source_path.exists() {
+        // Copy to the OUT_DIR with a predictable name
+        let dest_path = out_dir.join("libpostal_data");
+        
+        if let Err(e) = std::fs::copy(&source_path, &dest_path) {
+            println!("cargo:warning=Failed to copy libpostal_data executable: {}", e);
+        } else {
+            println!("cargo:warning=Copied libpostal_data to: {}", dest_path.display());
+            // Set the path as an environment variable so the Rust code can find it
+            println!("cargo:rustc-env=LIBPOSTAL_DATA_EXECUTABLE={}", dest_path.display());
+            
+            // Make it executable on Unix systems
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(metadata) = std::fs::metadata(&dest_path) {
+                    let mut perms = metadata.permissions();
+                    perms.set_mode(0o755);
+                    if let Err(e) = std::fs::set_permissions(&dest_path, perms) {
+                        println!("cargo:warning=Failed to set executable permissions: {}", e);
+                    }
+                }
+            }
+        }
+    } else {
+        println!("cargo:warning=libpostal_data executable not found at: {}", source_path.display());
+    }
 }
