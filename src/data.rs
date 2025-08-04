@@ -3,6 +3,47 @@
 use crate::error::Result;
 use std::path::{Path, PathBuf};
 
+/// Essential libpostal data files that must be present for the library to function.
+const REQUIRED_DATA_FILES: &[&str] = &[
+    "address_expansions/address_dictionary.dat",
+    "numex/numex.dat",
+    "transliteration/transliteration.dat",
+    "address_parser/address_parser_crf.dat",
+    "address_parser/address_parser_phrases.dat",
+    "address_parser/address_parser_postal_codes.dat",
+    "address_parser/address_parser_vocab.trie",
+    "language_classifier/language_classifier.dat",
+];
+
+/// Minimal set of files for basic validation.
+const MINIMAL_DATA_FILES: &[&str] = &[
+    "address_expansions/address_dictionary.dat",
+    "numex/numex.dat",
+    "transliteration/transliteration.dat",
+    "address_parser/address_parser_crf.dat",
+];
+
+/// Default data download URLs to try in order of preference.
+const DEFAULT_DATA_URLS: &[&str] = &[
+    "https://github.com/openvenues/libpostal/releases/download/v1.1/libpostal_data_v1.tar.gz",
+    "http://download.geonames.org/libpostal/libpostal_data_v1.tar.gz",
+];
+
+/// Common system installation paths for libpostal data.
+const SYSTEM_DATA_PATHS: &[&str] = &[
+    "/usr/share/libpostal",
+    "/usr/local/share/libpostal",
+    "/opt/libpostal",
+    "/opt/local/share/libpostal",
+];
+
+/// Project relative paths to search for development data.
+const PROJECT_DATA_PATHS: &[&str] = &[
+    "data/libpostal",
+    "../data/libpostal", 
+    "../../data/libpostal",
+];
+
 /// Data file manager for libpostal.
 pub struct DataManager {
     data_dir: PathBuf,
@@ -44,6 +85,43 @@ impl DataManager {
         &self.config
     }
 
+    /// Helper to create data errors with consistent formatting
+    fn data_error<S: Into<String>>(message: S) -> crate::error::Error {
+        crate::error::Error::data_error(message.into())
+    }
+
+    /// Helper to create directories with error handling
+    fn create_dir_all<P: AsRef<Path>>(path: P) -> Result<()> {
+        std::fs::create_dir_all(path.as_ref()).map_err(|e| {
+            Self::data_error(format!("Failed to create directory {}: {e}", path.as_ref().display()))
+        })
+    }
+
+    /// Helper to copy files with error handling
+    fn copy_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
+        std::fs::copy(from.as_ref(), to.as_ref()).map_err(|e| {
+            Self::data_error(format!(
+                "Failed to copy {} to {}: {e}",
+                from.as_ref().display(),
+                to.as_ref().display()
+            ))
+        })?;
+        Ok(())
+    }
+
+    /// Helper to set file permissions on Unix systems
+    #[cfg(unix)]
+    fn make_executable<P: AsRef<Path>>(path: P) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path.as_ref())
+            .map_err(|e| Self::data_error(format!("Failed to get permissions: {e}")))?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path.as_ref(), perms).map_err(|e| {
+            Self::data_error(format!("Failed to set permissions: {e}"))
+        })
+    }
+
     /// Check if required data files are present.
     pub fn is_data_available(&self) -> bool {
         if !self.data_dir.exists() {
@@ -51,24 +129,9 @@ impl DataManager {
         }
 
         // Check for essential libpostal data files
-        let required_files = [
-            "address_expansions/address_dictionary.dat",
-            "numex/numex.dat",
-            "transliteration/transliteration.dat",
-            "address_parser/address_parser_crf.dat",
-            "address_parser/address_parser_phrases.dat",
-            "address_parser/address_parser_postal_codes.dat",
-            "address_parser/address_parser_vocab.trie",
-            "language_classifier/language_classifier.dat",
-        ];
-
-        for file in &required_files {
-            if !self.data_dir.join(file).exists() {
-                return false;
-            }
-        }
-
-        true
+        REQUIRED_DATA_FILES.iter().all(|file| {
+            self.data_dir.join(file).exists()
+        })
     }
 
     /// Download required data files.
@@ -85,24 +148,11 @@ impl DataManager {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let root_path = std::path::Path::new(manifest_dir).join("libpostal_data");
         
-        std::fs::copy(&embedded_path, &root_path).map_err(|e| {
-            crate::error::Error::data_error(format!(
-                "Failed to copy libpostal_data to project root: {e}"
-            ))
-        })?;
+        Self::copy_file(&embedded_path, &root_path)?;
         
         // Make it executable on Unix systems
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&root_path)
-                .map_err(|e| crate::error::Error::data_error(format!("Failed to get permissions: {e}")))?
-                .permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&root_path, perms).map_err(|e| {
-                crate::error::Error::data_error(format!("Failed to set permissions: {e}"))
-            })?;
-        }
+        Self::make_executable(&root_path)?;
         
         println!("Copied libpostal_data to project root: {}", root_path.display());
         Ok(())
@@ -116,18 +166,7 @@ impl DataManager {
 
         // Check that files exist and are non-empty
         // Future enhancement: implement SHA256 checksum verification
-        let required_files = [
-            "address_expansions/address_dictionary.dat",
-            "numex/numex.dat",
-            "transliteration/transliteration.dat",
-            "address_parser/address_parser_crf.dat",
-            "address_parser/address_parser_phrases.dat",
-            "address_parser/address_parser_postal_codes.dat",
-            "address_parser/address_parser_vocab.trie",
-            "language_classifier/language_classifier.dat",
-        ];
-
-        for file in &required_files {
+        for file in REQUIRED_DATA_FILES {
             let path = self.data_dir.join(file);
             if !path.exists() {
                 return Err(crate::error::Error::data_error(format!(
@@ -212,41 +251,34 @@ impl DataManager {
     /// Download real libpostal data files
     #[cfg(feature = "runtime-data")]
     async fn download_real_data(&self) -> Result<()> {
-        use std::fs;
-
         // Create data directory
-        fs::create_dir_all(&self.data_dir).map_err(|e| {
-            crate::error::Error::data_error(format!("Failed to create data directory: {e}"))
-        })?;
+        Self::create_dir_all(&self.data_dir)?;
 
         println!("Setting up libpostal data files...");
 
-        // Method 1: Try using libpostal_data command if available
+        // Try download strategies in order of preference
         if let Ok(()) = self.download_with_libpostal_data().await {
             println!("Successfully downloaded data using libpostal_data command");
             return Ok(());
         }
 
-        // Method 2: Try to copy from system libpostal installation
         if let Ok(()) = self.copy_from_system_libpostal().await {
-            println!("Successfully copied data from system libpostal installation");
+            println!("Successfully downloaded data using system installation");
             return Ok(());
         }
 
-        // Method 3: Try to copy from current working directory (development scenario)
         if let Ok(()) = self.copy_from_project_data().await {
-            println!("Successfully copied data from project directory");
+            println!("Successfully downloaded data using project directory");
             return Ok(());
         }
 
-        // Method 4: Try to download directly from libpostal's data sources
         if let Ok(()) = self.download_from_official_sources().await {
-            println!("Successfully downloaded data from official sources");
+            println!("Successfully downloaded data using official sources");
             return Ok(());
         }
 
-        // Fall back to informative error message
-        Err(crate::error::Error::data_error(
+        // All strategies failed
+        Err(Self::data_error(
             "Could not find or download libpostal data files.\n\
             \n\
             To resolve this issue, try one of the following:\n\
@@ -297,70 +329,98 @@ impl DataManager {
     /// Find the embedded libpostal_data executable that was built during compilation
     #[cfg(feature = "runtime-data")]
     fn find_embedded_libpostal_data(&self) -> Result<PathBuf> {
-        // First check if the build script set a specific path
-        if let Some(executable_path) = option_env!("LIBPOSTAL_DATA_EXECUTABLE") {
-            let path = PathBuf::from(executable_path);
-            if path.exists() && path.is_file() {
-                return Ok(path);
-            }
-        }
-        
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        
-        // Check if there's a copy in the project root (created by copy_libpostal_data_to_root)
-        let root_path = std::path::Path::new(manifest_dir).join("libpostal_data");
-        if root_path.exists() && root_path.is_file() {
-            return Ok(root_path);
-        }
-        
-        // Try to find the libpostal_data executable in the target build directory
-        // It should be at target/*/build/libpostal-rs-*/out/libpostal-install/bin/libpostal_data
-        let target_dir = std::path::Path::new(manifest_dir).join("target");
-        
-        // Search in both debug and release directories
-        let search_patterns = [
-            "debug/build/libpostal-rs-*/out/libpostal-install/bin/libpostal_data",
-            "release/build/libpostal-rs-*/out/libpostal-install/bin/libpostal_data",
-            "debug/build/libpostal-rs-*/out/libpostal_data",  // Copy made by build script
-            "release/build/libpostal-rs-*/out/libpostal_data", // Copy made by build script
+        // Try in order of preference
+        let candidates = [
+            self.try_executable_from_env(),
+            self.try_executable_from_project_root(),
+            self.try_executable_from_build_dir(),
+            self.try_system_executable(),
         ];
-        
-        for pattern in &search_patterns {
-            let pattern_path = target_dir.join(pattern);
-            
-            // Use glob to find the path with wildcard
-            if let Some(parent) = pattern_path.parent()
-                && let Some(parent_parent) = parent.parent()
-                    && let Ok(entries) = std::fs::read_dir(parent_parent) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if path.is_dir() && path.file_name().unwrap().to_string_lossy().starts_with("libpostal-rs-") {
-                                // Check both the installed version and the copy
-                                let candidates = [
-                                    path.join("out/libpostal-install/bin/libpostal_data"),
-                                    path.join("out/libpostal_data"),
-                                ];
-                                
-                                for candidate in &candidates {
-                                    if candidate.exists() && candidate.is_file() {
-                                        return Ok(candidate.clone());
-                                    }
-                                }
-                            }
-                        }
-                    }
-        }
-        
-        // If not found in target directory, try to use system libpostal_data as fallback
-        if let Ok(output) = std::process::Command::new("libpostal_data").arg("--help").output()
-            && output.status.success() {
-                return Ok(PathBuf::from("libpostal_data"));
+
+        for candidate in candidates.into_iter().flatten() {
+            if candidate.exists() && candidate.is_file() {
+                return Ok(candidate);
             }
+        }
         
         Err(crate::error::Error::data_error(
             "Could not find libpostal_data executable. This should have been built during compilation.\n\
             Try running 'cargo build' first to ensure libpostal is properly compiled."
         ))
+    }
+
+    /// Try to get executable path from environment variable
+    #[cfg(feature = "runtime-data")]
+    fn try_executable_from_env(&self) -> Option<PathBuf> {
+        option_env!("LIBPOSTAL_DATA_EXECUTABLE").map(PathBuf::from)
+    }
+
+    /// Try to get executable from project root
+    #[cfg(feature = "runtime-data")]
+    fn try_executable_from_project_root(&self) -> Option<PathBuf> {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        Some(std::path::Path::new(manifest_dir).join("libpostal_data"))
+    }
+
+    /// Try to find executable in build directory
+    #[cfg(feature = "runtime-data")]
+    fn try_executable_from_build_dir(&self) -> Option<PathBuf> {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let target_dir = std::path::Path::new(manifest_dir).join("target");
+        
+        let search_patterns = [
+            "debug/build/libpostal-rs-*/out/libpostal-install/bin/libpostal_data",
+            "release/build/libpostal-rs-*/out/libpostal-install/bin/libpostal_data",
+            "debug/build/libpostal-rs-*/out/libpostal_data",
+            "release/build/libpostal-rs-*/out/libpostal_data",
+        ];
+        
+        for pattern in &search_patterns {
+            if let Some(path) = self.find_file_with_pattern(&target_dir, pattern) {
+                return Some(path);
+            }
+        }
+        
+        None
+    }
+
+    /// Try to use system libpostal_data
+    #[cfg(feature = "runtime-data")]
+    fn try_system_executable(&self) -> Option<PathBuf> {
+        std::process::Command::new("libpostal_data")
+            .arg("--help")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|_| PathBuf::from("libpostal_data"))
+    }
+
+    /// Find a file using a glob-like pattern
+    #[cfg(feature = "runtime-data")]
+    fn find_file_with_pattern(&self, base_dir: &Path, pattern: &str) -> Option<PathBuf> {
+        let pattern_path = base_dir.join(pattern);
+        
+        if let Some(parent) = pattern_path.parent()
+            && let Some(parent_parent) = parent.parent()
+            && let Ok(entries) = std::fs::read_dir(parent_parent) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() && path.file_name().unwrap().to_string_lossy().starts_with("libpostal-rs-") {
+                        let candidates = [
+                            path.join("out/libpostal-install/bin/libpostal_data"),
+                            path.join("out/libpostal_data"),
+                        ];
+                        
+                        for candidate in &candidates {
+                            if candidate.exists() && candidate.is_file() {
+                                return Some(candidate.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        
+        None
     }
 
     /// Try to download from official libpostal data sources
@@ -369,14 +429,7 @@ impl DataManager {
         println!("Attempting to download from official libpostal data sources...");
         println!("This may take a while as the data files are large (~1GB)");
 
-        // Libpostal data is hosted on various CDNs and S3 buckets
-        // We'll try the most common endpoints
-        let data_urls = [
-            "https://github.com/openvenues/libpostal/releases/download/v1.1/libpostal_data_v1.tar.gz",
-            "http://download.geonames.org/libpostal/libpostal_data_v1.tar.gz", 
-        ];
-
-        for url in &data_urls {
+        for url in DEFAULT_DATA_URLS {
             println!("Trying to download from: {url}");
             match self.download_and_extract_data(url).await {
                 Ok(()) => {
@@ -384,15 +437,13 @@ impl DataManager {
                     return Ok(());
                 }
                 Err(e) => {
-                    println!("⚠ Failed to download from {url}: {e}");
+                    println!("Failed to download from {url}: {e}");
                     continue;
                 }
             }
         }
 
-        Err(crate::error::Error::data_error(
-            "All download sources failed",
-        ))
+        Err(Self::data_error("All download sources failed"))
     }
 
     /// Download and extract data archive
@@ -460,63 +511,34 @@ impl DataManager {
     /// Try to copy data from system libpostal installation
     #[cfg(feature = "runtime-data")]
     async fn copy_from_system_libpostal(&self) -> Result<()> {
-        // Common system paths where libpostal data might be installed
-        let system_paths = [
-            "/usr/share/libpostal",
-            "/usr/local/share/libpostal",
-            "/opt/libpostal",
-            "/opt/local/share/libpostal",
-        ];
-
-        for path in &system_paths {
+        for path in SYSTEM_DATA_PATHS {
             let system_data_dir = std::path::PathBuf::from(path);
             if system_data_dir.exists() && self.validate_data_dir(&system_data_dir) {
                 return self.copy_data_directory(&system_data_dir).await;
             }
         }
 
-        Err(crate::error::Error::data_error(
-            "No system libpostal installation found",
-        ))
+        Err(Self::data_error("No system libpostal installation found"))
     }
 
     /// Try to copy data from project directory (for development)
     #[cfg(feature = "runtime-data")]
     async fn copy_from_project_data(&self) -> Result<()> {
-        let project_data_paths = [
-            "data/libpostal",
-            "../data/libpostal",
-            "../../data/libpostal",
-        ];
-
-        for path in &project_data_paths {
+        for path in PROJECT_DATA_PATHS {
             let project_data_dir = std::path::PathBuf::from(path);
             if project_data_dir.exists() && self.validate_data_dir(&project_data_dir) {
                 return self.copy_data_directory(&project_data_dir).await;
             }
         }
 
-        Err(crate::error::Error::data_error(
-            "No project data directory found",
-        ))
+        Err(Self::data_error("No project data directory found"))
     }
 
     /// Validate that a directory contains the expected libpostal data structure
     fn validate_data_dir(&self, dir: &std::path::Path) -> bool {
-        let required_files = [
-            "address_expansions/address_dictionary.dat",
-            "numex/numex.dat",
-            "transliteration/transliteration.dat",
-            "address_parser/address_parser_crf.dat",
-        ];
-
-        for file in &required_files {
-            if !dir.join(file).exists() {
-                return false;
-            }
-        }
-
-        true
+        MINIMAL_DATA_FILES.iter().all(|file| {
+            dir.join(file).exists()
+        })
     }
 
     /// Copy data directory from source to target

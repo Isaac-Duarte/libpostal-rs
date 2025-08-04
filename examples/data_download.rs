@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
     println!("1. Copying libpostal_data executable to project root...");
     match data_manager.copy_libpostal_data_to_root() {
         Ok(()) => println!("   Successfully copied libpostal_data executable"),
-        Err(e) => println!("   ⚠ Failed to copy libpostal_data: {}", e),
+        Err(e) => println!("   Failed to copy libpostal_data: {}", e),
     }
     println!();
 
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         match data_manager.verify_data() {
             Ok(()) => println!("   Data verification passed"),
             Err(e) => {
-                println!("   ⚠ Data verification failed: {}", e);
+                println!("   Data verification failed: {}", e);
                 println!("   You may need to re-download the data files.");
             }
         }
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
                 // Verify the downloaded data
                 match data_manager.verify_data() {
                     Ok(()) => println!("   Data verification passed"),
-                    Err(e) => println!("   ⚠ Data verification failed: {}", e),
+                    Err(e) => println!("   Data verification failed: {}", e),
                 }
                 
                 // Show final data size
@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
     match test_libpostal_functionality().await {
         Ok(()) => println!("   libpostal is working correctly!"),
         Err(e) => {
-            println!("   ⚠ libpostal test failed: {}", e);
+            println!("   libpostal test failed: {}", e);
             println!("   The data may not be complete or there may be a configuration issue.");
         }
     }
