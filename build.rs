@@ -11,6 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use bindgen::RustEdition;
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=wrapper.h");
@@ -63,16 +65,21 @@ pub type libpostal_address_parser_options_t = u32;
 pub type libpostal_normalize_options_t = u32;
 pub type libpostal_address_parser_response_t = u32;
 
-pub unsafe extern "C" fn libpostal_setup() -> bool { false }
-pub unsafe extern "C" fn libpostal_setup_parser() -> bool { false }
-pub unsafe extern "C" fn libpostal_teardown() {}
-pub unsafe extern "C" fn libpostal_teardown_parser() {}
-pub unsafe extern "C" fn libpostal_get_address_parser_default_options() -> libpostal_address_parser_options_t { 0 }
-pub unsafe extern "C" fn libpostal_get_default_options() -> libpostal_normalize_options_t { 0 }
-pub unsafe extern "C" fn libpostal_parse_address(_: *const std::os::raw::c_char, _: libpostal_address_parser_options_t, _: *mut usize) -> *mut libpostal_address_parser_response_t { std::ptr::null_mut() }
-pub unsafe extern "C" fn libpostal_expand_address(_: *const std::os::raw::c_char, _: libpostal_normalize_options_t, _: *mut usize) -> *mut *mut std::os::raw::c_char { std::ptr::null_mut() }
-pub unsafe extern "C" fn libpostal_address_parser_response_destroy(_: *mut libpostal_address_parser_response_t) {}
-pub unsafe extern "C" fn libpostal_expansion_array_destroy(_: *mut *mut std::os::raw::c_char, _: usize) {}
+unsafe extern "C" {
+    pub fn libpostal_setup() -> bool;
+    pub fn libpostal_setup_parser() -> bool;
+    pub fn libpostal_teardown();
+    pub fn libpostal_teardown_parser();
+    pub fn libpostal_get_address_parser_default_options() -> libpostal_address_parser_options_t;
+    pub fn libpostal_get_default_options() -> libpostal_normalize_options_t;
+    pub fn libpostal_parse_address(address: *const std::os::raw::c_char, options: libpostal_address_parser_options_t, num_components: *mut usize) -> *mut libpostal_address_parser_response_t;
+    pub fn libpostal_expand_address(address: *const std::os::raw::c_char, options: libpostal_normalize_options_t, num_expansions: *mut usize) -> *mut *mut std::os::raw::c_char;
+    pub fn libpostal_address_parser_response_destroy(response: *mut libpostal_address_parser_response_t);
+    pub fn libpostal_expansion_array_destroy(expansions: *mut *mut std::os::raw::c_char, num_expansions: usize);
+}
+
+// Dummy implementations that will never be called since the functions are declared extern
+// These are just to satisfy the linker in case of dummy builds
 "#;
 
     let bindings_path = out_dir.join("bindings.rs");
@@ -102,16 +109,16 @@ fn check_build_dependencies() {
 /// Try to use system-installed libpostal via pkg-config
 fn try_system_libpostal() -> bool {
     // Only try system libpostal if explicitly requested
-    if env::var("LIBPOSTAL_SYSTEM").is_ok() {
-        if let Ok(library) = pkg_config::probe_library("libpostal") {
-            for path in &library.link_paths {
-                println!("cargo:rustc-link-search=native={}", path.display());
-            }
-            for lib in &library.libs {
-                println!("cargo:rustc-link-lib={lib}");
-            }
-            return true;
+    if env::var("LIBPOSTAL_SYSTEM").is_ok()
+        && let Ok(library) = pkg_config::probe_library("libpostal")
+    {
+        for path in &library.link_paths {
+            println!("cargo:rustc-link-search=native={}", path.display());
         }
+        for lib in &library.libs {
+            println!("cargo:rustc-link-lib={lib}");
+        }
+        return true;
     }
     false
 }
@@ -332,7 +339,8 @@ fn generate_bindings_impl(out_dir: &Path, include_dir: Option<PathBuf>) {
         .derive_hash(true)
         .derive_ord(true)
         .derive_partialeq(true)
-        .derive_partialord(true);
+        .derive_partialord(true)
+        .rust_edition(RustEdition::Edition2024);
 
     // Add include directory if building from source
     if let Some(include_dir) = include_dir {
@@ -373,7 +381,9 @@ fn apply_libpostal_patches(libpostal_dir: &Path) -> std::io::Result<()> {
         );
 
         if content != patched_content {
-            println!("cargo:warning=Applied patch to fix pointer type compatibility in sparse_matrix_utils.c");
+            println!(
+                "cargo:warning=Applied patch to fix pointer type compatibility in sparse_matrix_utils.c"
+            );
             std::fs::write(&sparse_matrix_utils_path, patched_content)?;
         }
     }
@@ -403,18 +413,24 @@ fn apply_libpostal_patches(libpostal_dir: &Path) -> std::io::Result<()> {
 /// Copy the libpostal_data executable to a more accessible location
 fn copy_libpostal_data_executable(install_dir: &Path, out_dir: &Path) {
     let source_path = install_dir.join("bin/libpostal_data");
-    
+
     if source_path.exists() {
         // Copy to the OUT_DIR with a predictable name
         let dest_path = out_dir.join("libpostal_data");
-        
+
         if let Err(e) = std::fs::copy(&source_path, &dest_path) {
-            println!("cargo:warning=Failed to copy libpostal_data executable: {}", e);
+            println!("cargo:warning=Failed to copy libpostal_data executable: {e}");
         } else {
-            println!("cargo:warning=Copied libpostal_data to: {}", dest_path.display());
+            println!(
+                "cargo:warning=Copied libpostal_data to: {}",
+                dest_path.display()
+            );
             // Set the path as an environment variable so the Rust code can find it
-            println!("cargo:rustc-env=LIBPOSTAL_DATA_EXECUTABLE={}", dest_path.display());
-            
+            println!(
+                "cargo:rustc-env=LIBPOSTAL_DATA_EXECUTABLE={}",
+                dest_path.display()
+            );
+
             // Make it executable on Unix systems
             #[cfg(unix)]
             {
@@ -423,12 +439,15 @@ fn copy_libpostal_data_executable(install_dir: &Path, out_dir: &Path) {
                     let mut perms = metadata.permissions();
                     perms.set_mode(0o755);
                     if let Err(e) = std::fs::set_permissions(&dest_path, perms) {
-                        println!("cargo:warning=Failed to set executable permissions: {}", e);
+                        println!("cargo:warning=Failed to set executable permissions: {e}");
                     }
                 }
             }
         }
     } else {
-        println!("cargo:warning=libpostal_data executable not found at: {}", source_path.display());
+        println!(
+            "cargo:warning=libpostal_data executable not found at: {}",
+            source_path.display()
+        );
     }
 }

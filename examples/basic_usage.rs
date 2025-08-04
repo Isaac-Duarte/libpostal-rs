@@ -17,7 +17,7 @@ async fn main() -> Result<(), Error> {
     // Initialize LibPostal with default configuration
     println!("Initializing LibPostal...");
     let postal = LibPostal::new().await?;
-    println!("✓ LibPostal initialized successfully\n");
+    println!("LibPostal initialized successfully\n");
 
     // Example 1: Basic address parsing
     println!("1. Basic Address Parsing");
@@ -168,7 +168,7 @@ async fn main() -> Result<(), Error> {
     }
     println!();
 
-    println!("✓ All examples completed successfully!");
+    println!("All examples completed successfully!");
 
     Ok(())
 }

@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match LibPostal::new().await {
         Ok(_postal) => {
-            println!("✓ libpostal initialized successfully");
+            println!("libpostal initialized successfully");
 
             // Example addresses to parse
             let addresses = vec![
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Err(e) => {
-            println!("✗ Failed to initialize libpostal: {}", e);
+            println!("Failed to initialize libpostal: {}", e);
             println!("Note: This requires libpostal data files to be available.");
             println!("Run the data setup script or install libpostal system-wide.");
         }

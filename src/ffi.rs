@@ -503,7 +503,7 @@ fn convert_parse_options(
 unsafe fn convert_normalize_options(
     options: &NormalizeOptions,
 ) -> Result<libpostal_normalize_options_t> {
-    let mut opts = libpostal_get_default_options();
+    let mut opts = unsafe { libpostal_get_default_options() };
 
     // Apply normalization settings - the generated bindings use bool
     opts.address_components = options.address_components;
@@ -801,8 +801,8 @@ mod tests {
     /// Test thread safety of initialization
     #[test]
     fn test_thread_safety() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
         let success_count = Arc::new(AtomicUsize::new(0));

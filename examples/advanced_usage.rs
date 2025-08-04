@@ -27,7 +27,7 @@ async fn main() -> Result<(), Error> {
 
     println!("Initializing with custom configuration...");
     let postal = LibPostal::with_config(config).await?;
-    println!("✓ Custom LibPostal initialized\n");
+    println!("Custom LibPostal initialized\n");
 
     // Example 2: Performance measurement
     println!("2. Performance Measurement");
@@ -147,7 +147,7 @@ async fn main() -> Result<(), Error> {
         match postal.parse_address_with_hints(address, Some(lang_code), Some(country_code)) {
             Ok(parsed) => {
                 println!(
-                    "  ✓ Parsed successfully ({} components)",
+                    "  Parsed successfully ({} components)",
                     parsed.components().len()
                 );
                 if let Some(city) = &parsed.city {
@@ -158,7 +158,7 @@ async fn main() -> Result<(), Error> {
                 }
             }
             Err(e) => {
-                println!("  ✗ Parse failed: {}", e);
+                println!("  Parse failed: {}", e);
             }
         }
         println!();
@@ -219,7 +219,7 @@ async fn main() -> Result<(), Error> {
     );
     println!();
 
-    println!("✓ All advanced examples completed successfully!");
+    println!("All advanced examples completed successfully!");
 
     Ok(())
 }

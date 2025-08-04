@@ -104,7 +104,7 @@ impl DataManager {
             })?;
         }
         
-        println!("✓ Copied libpostal_data to project root: {}", root_path.display());
+        println!("Copied libpostal_data to project root: {}", root_path.display());
         Ok(())
     }
 
@@ -223,25 +223,25 @@ impl DataManager {
 
         // Method 1: Try using libpostal_data command if available
         if let Ok(()) = self.download_with_libpostal_data().await {
-            println!("✓ Successfully downloaded data using libpostal_data command");
+            println!("Successfully downloaded data using libpostal_data command");
             return Ok(());
         }
 
         // Method 2: Try to copy from system libpostal installation
         if let Ok(()) = self.copy_from_system_libpostal().await {
-            println!("✓ Successfully copied data from system libpostal installation");
+            println!("Successfully copied data from system libpostal installation");
             return Ok(());
         }
 
         // Method 3: Try to copy from current working directory (development scenario)
         if let Ok(()) = self.copy_from_project_data().await {
-            println!("✓ Successfully copied data from project directory");
+            println!("Successfully copied data from project directory");
             return Ok(());
         }
 
         // Method 4: Try to download directly from libpostal's data sources
         if let Ok(()) = self.download_from_official_sources().await {
-            println!("✓ Successfully downloaded data from official sources");
+            println!("Successfully downloaded data from official sources");
             return Ok(());
         }
 
@@ -286,12 +286,11 @@ impl DataManager {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
             return Err(crate::error::Error::data_error(format!(
-                "libpostal_data failed:\nstdout: {}\nstderr: {}",
-                stdout, stderr
+                "libpostal_data failed:\nstdout: {stdout}\nstderr: {stderr}"
             )));
         }
 
-        println!("✓ Data download completed successfully");
+        println!("Data download completed successfully");
         Ok(())
     }
 
@@ -330,9 +329,9 @@ impl DataManager {
             let pattern_path = target_dir.join(pattern);
             
             // Use glob to find the path with wildcard
-            if let Some(parent) = pattern_path.parent() {
-                if let Some(parent_parent) = parent.parent() {
-                    if let Ok(entries) = std::fs::read_dir(parent_parent) {
+            if let Some(parent) = pattern_path.parent()
+                && let Some(parent_parent) = parent.parent()
+                    && let Ok(entries) = std::fs::read_dir(parent_parent) {
                         for entry in entries.flatten() {
                             let path = entry.path();
                             if path.is_dir() && path.file_name().unwrap().to_string_lossy().starts_with("libpostal-rs-") {
@@ -350,16 +349,13 @@ impl DataManager {
                             }
                         }
                     }
-                }
-            }
         }
         
         // If not found in target directory, try to use system libpostal_data as fallback
-        if let Ok(output) = std::process::Command::new("libpostal_data").arg("--help").output() {
-            if output.status.success() {
+        if let Ok(output) = std::process::Command::new("libpostal_data").arg("--help").output()
+            && output.status.success() {
                 return Ok(PathBuf::from("libpostal_data"));
             }
-        }
         
         Err(crate::error::Error::data_error(
             "Could not find libpostal_data executable. This should have been built during compilation.\n\
@@ -384,7 +380,7 @@ impl DataManager {
             println!("Trying to download from: {url}");
             match self.download_and_extract_data(url).await {
                 Ok(()) => {
-                    println!("✓ Successfully downloaded and extracted data");
+                    println!("Successfully downloaded and extracted data");
                     return Ok(());
                 }
                 Err(e) => {
