@@ -1,6 +1,6 @@
 [package]
 name = "libpostal-rs"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 authors = ["Isaac Duarte <isaac@elektrikapp.com>"]
 description = "Static Rust bindings for libpostal - international address parsing and normalization"
@@ -13,7 +13,7 @@ documentation = "https://docs.rs/libpostal-rs"
 
 [features]
 default = ["runtime-data"]
-runtime-data = ["dep:reqwest", "dep:tar", "dep:flate2"]
+runtime-data = ["dep:reqwest", "dep:tar", "dep:flate2", "dep:futures"]
 bundled-data = []
 serde = ["dep:serde"]
 parallel = ["dep:rayon"]
@@ -34,6 +34,7 @@ rayon = { version = "1.8", optional = true }
 reqwest = { version = "0.12", features = ["stream"], optional = true }
 tar = { version = "0.4", optional = true }
 flate2 = { version = "1.0", optional = true }
+futures = { version = "0.3", optional = true }
 
 [build-dependencies]
 # Build system dependencies

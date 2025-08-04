@@ -2,6 +2,13 @@
 
 use crate::error::Result;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+#[cfg(feature = "runtime-data")]
+use std::io::Write;
+
+#[cfg(feature = "runtime-data")]
+use futures::future;
 
 /// Essential libpostal data files that must be present for the library to function.
 const REQUIRED_DATA_FILES: &[&str] = &[
@@ -15,34 +22,130 @@ const REQUIRED_DATA_FILES: &[&str] = &[
     "language_classifier/language_classifier.dat",
 ];
 
-/// Minimal set of files for basic validation.
-const MINIMAL_DATA_FILES: &[&str] = &[
-    "address_expansions/address_dictionary.dat",
-    "numex/numex.dat",
-    "transliteration/transliteration.dat",
-    "address_parser/address_parser_crf.dat",
-];
+/// Chunk size for multipart downloads (64MB).
+const CHUNK_SIZE: usize = 64 * 1024 * 1024;
 
-/// Default data download URLs to try in order of preference.
-const DEFAULT_DATA_URLS: &[&str] = &[
-    "https://github.com/openvenues/libpostal/releases/download/v1.1/libpostal_data_v1.tar.gz",
-    "http://download.geonames.org/libpostal/libpostal_data_v1.tar.gz",
-];
+/// Default number of parallel download workers.
+const DEFAULT_NUM_WORKERS: usize = 12;
 
-/// Common system installation paths for libpostal data.
-const SYSTEM_DATA_PATHS: &[&str] = &[
-    "/usr/share/libpostal",
-    "/usr/local/share/libpostal",
-    "/opt/libpostal",
-    "/opt/local/share/libpostal",
-];
+/// Component file information.
+const LIBPOSTAL_DATA_FILE_CHUNKS: usize = 1;
+const LIBPOSTAL_PARSER_MODEL_CHUNKS: usize = 12;
+const LIBPOSTAL_LANG_CLASS_MODEL_CHUNKS: usize = 1;
 
-/// Project relative paths to search for development data.
-const PROJECT_DATA_PATHS: &[&str] = &[
-    "data/libpostal",
-    "../data/libpostal", 
-    "../../data/libpostal",
-];
+const LIBPOSTAL_DATA_FILE_LATEST_VERSION: &str = "v1.0.0";
+const LIBPOSTAL_PARSER_MODEL_LATEST_VERSION: &str = "v1.0.0";
+const LIBPOSTAL_LANG_CLASS_MODEL_LATEST_VERSION: &str = "v1.0.0";
+
+const LIBPOSTAL_DATA_FILE: &str = "libpostal_data.tar.gz";
+const LIBPOSTAL_PARSER_FILE: &str = "parser.tar.gz";
+const LIBPOSTAL_LANG_CLASS_FILE: &str = "language_classifier.tar.gz";
+
+const LIBPOSTAL_BASE_URL: &str = "https://github.com/openvenues/libpostal/releases/download";
+
+/// Module directories for data organization.
+const BASIC_MODULE_DIRS: &[&str] = &["address_expansions", "numex", "transliteration"];
+const PARSER_MODULE_DIR: &str = "address_parser";
+const LANGUAGE_CLASSIFIER_MODULE_DIR: &str = "language_classifier";
+
+/// Data component types for libpostal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataComponent {
+    /// Base data (address_expansions, numex, transliteration)
+    Base,
+    /// Address parser model
+    Parser,
+    /// Language classifier model  
+    LanguageClassifier,
+    /// All components
+    All,
+}
+
+/// Information about a data component.
+#[derive(Debug, Clone)]
+pub struct ComponentInfo {
+    /// Component version
+    pub version: String,
+    /// Number of chunks for multipart download
+    pub num_chunks: usize,
+    /// Archive filename
+    pub filename: String,
+    /// Component display name
+    pub name: String,
+    /// Subdirectories that will be created/updated
+    pub subdirs: Vec<String>,
+}
+
+/// Download progress information.
+#[derive(Debug, Clone)]
+pub struct DownloadProgress {
+    /// Total bytes to download
+    pub total_bytes: u64,
+    /// Bytes downloaded so far
+    pub downloaded_bytes: u64,
+    /// Current chunk being downloaded
+    pub current_chunk: usize,
+    /// Total number of chunks
+    pub total_chunks: usize,
+    /// Download speed in bytes per second
+    pub speed_bps: u64,
+}
+
+/// GitHub release asset information.
+#[derive(Debug, Clone)]
+pub struct ReleaseAsset {
+    /// Asset name
+    pub name: String,
+    /// Download URL
+    pub download_url: String,
+    /// Asset size in bytes
+    pub size: u64,
+}
+
+/// Get component information for a data component.
+pub fn get_component_info(component: DataComponent) -> ComponentInfo {
+    match component {
+        DataComponent::Base => ComponentInfo {
+            version: LIBPOSTAL_DATA_FILE_LATEST_VERSION.to_string(),
+            num_chunks: LIBPOSTAL_DATA_FILE_CHUNKS,
+            filename: LIBPOSTAL_DATA_FILE.to_string(),
+            name: "data file".to_string(),
+            subdirs: BASIC_MODULE_DIRS.iter().map(|s| s.to_string()).collect(),
+        },
+        DataComponent::Parser => ComponentInfo {
+            version: LIBPOSTAL_PARSER_MODEL_LATEST_VERSION.to_string(),
+            num_chunks: LIBPOSTAL_PARSER_MODEL_CHUNKS,
+            filename: LIBPOSTAL_PARSER_FILE.to_string(),
+            name: "parser data file".to_string(),
+            subdirs: vec![PARSER_MODULE_DIR.to_string()],
+        },
+        DataComponent::LanguageClassifier => ComponentInfo {
+            version: LIBPOSTAL_LANG_CLASS_MODEL_LATEST_VERSION.to_string(),
+            num_chunks: LIBPOSTAL_LANG_CLASS_MODEL_CHUNKS,
+            filename: LIBPOSTAL_LANG_CLASS_FILE.to_string(),
+            name: "language classifier data file".to_string(),
+            subdirs: vec![LANGUAGE_CLASSIFIER_MODULE_DIR.to_string()],
+        },
+        DataComponent::All => ComponentInfo {
+            version: "all".to_string(),
+            num_chunks: 0, // Special case handled separately
+            filename: "all".to_string(),
+            name: "all components".to_string(),
+            subdirs: vec![],
+        },
+    }
+}
+
+/// Get version file path for a component.
+fn get_version_file_path(component: DataComponent, data_dir: &Path) -> PathBuf {
+    let filename = match component {
+        DataComponent::Base => "base_data_file_version",
+        DataComponent::Parser => "parser_model_file_version", 
+        DataComponent::LanguageClassifier => "language_classifier_model_file_version",
+        DataComponent::All => "data_version",
+    };
+    data_dir.join(filename)
+}
 
 /// Data file manager for libpostal.
 pub struct DataManager {
@@ -97,31 +200,6 @@ impl DataManager {
         })
     }
 
-    /// Helper to copy files with error handling
-    fn copy_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<()> {
-        std::fs::copy(from.as_ref(), to.as_ref()).map_err(|e| {
-            Self::data_error(format!(
-                "Failed to copy {} to {}: {e}",
-                from.as_ref().display(),
-                to.as_ref().display()
-            ))
-        })?;
-        Ok(())
-    }
-
-    /// Helper to set file permissions on Unix systems
-    #[cfg(unix)]
-    fn make_executable<P: AsRef<Path>>(path: P) -> Result<()> {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(path.as_ref())
-            .map_err(|e| Self::data_error(format!("Failed to get permissions: {e}")))?
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(path.as_ref(), perms).map_err(|e| {
-            Self::data_error(format!("Failed to set permissions: {e}"))
-        })
-    }
-
     /// Check if required data files are present.
     pub fn is_data_available(&self) -> bool {
         if !self.data_dir.exists() {
@@ -141,52 +219,6 @@ impl DataManager {
         self.ensure_data().await
     }
 
-    /// Copy the embedded libpostal_data executable to the project root for easy access
-    #[cfg(feature = "runtime-data")]
-    pub fn copy_libpostal_data_to_root(&self) -> Result<()> {
-        let embedded_path = self.find_embedded_libpostal_data()?;
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let root_path = std::path::Path::new(manifest_dir).join("libpostal_data");
-        
-        Self::copy_file(&embedded_path, &root_path)?;
-        
-        // Make it executable on Unix systems
-        #[cfg(unix)]
-        Self::make_executable(&root_path)?;
-        
-        println!("Copied libpostal_data to project root: {}", root_path.display());
-        Ok(())
-    }
-
-    /// Verify integrity of data files.
-    pub fn verify_data(&self) -> Result<()> {
-        if !self.is_data_available() {
-            return Err(crate::error::Error::data_error("Data files not found"));
-        }
-
-        // Check that files exist and are non-empty
-        // Future enhancement: implement SHA256 checksum verification
-        for file in REQUIRED_DATA_FILES {
-            let path = self.data_dir.join(file);
-            if !path.exists() {
-                return Err(crate::error::Error::data_error(format!(
-                    "Missing data file: {file}"
-                )));
-            }
-
-            let metadata = std::fs::metadata(&path).map_err(|e| {
-                crate::error::Error::data_error(format!("Failed to read metadata for {file}: {e}"))
-            })?;
-
-            if metadata.len() == 0 {
-                return Err(crate::error::Error::data_error(format!(
-                    "Empty data file: {file}"
-                )));
-            }
-        }
-
-        Ok(())
-    }
 
     /// Get the size of downloaded data.
     pub fn data_size(&self) -> Result<u64> {
@@ -227,6 +259,227 @@ impl DataManager {
         Ok(())
     }
 
+    /// Verify integrity of data files.
+    pub fn verify_data(&self) -> Result<()> {
+        if !self.is_data_available() {
+            return Err(crate::error::Error::data_error("Data files not found"));
+        }
+
+        // Check that files exist and are non-empty
+        // Future enhancement: implement SHA256 checksum verification
+        for file in REQUIRED_DATA_FILES {
+            let path = self.data_dir.join(file);
+            if !path.exists() {
+                return Err(crate::error::Error::data_error(format!(
+                    "Missing data file: {file}"
+                )));
+            }
+
+            let metadata = std::fs::metadata(&path).map_err(|e| {
+                crate::error::Error::data_error(format!("Failed to read metadata for {file}: {e}"))
+            })?;
+
+            if metadata.len() == 0 {
+                return Err(crate::error::Error::data_error(format!(
+                    "Empty data file: {file}"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check the version of a specific component.
+    #[cfg(feature = "runtime-data")]
+    fn check_component_version(&self, component: DataComponent) -> Result<Option<String>> {
+        let version_file = get_version_file_path(component, &self.data_dir);
+        if !version_file.exists() {
+            return Ok(None);
+        }
+
+        let version = std::fs::read_to_string(&version_file)
+            .map_err(|e| Self::data_error(format!("Failed to read version file: {e}")))?
+            .trim()
+            .to_string();
+
+        Ok(Some(version))
+    }
+
+    /// Write version file for a component.
+    #[cfg(feature = "runtime-data")]
+    fn write_version_file(&self, component: DataComponent, version: &str) -> Result<()> {
+        let version_file = get_version_file_path(component, &self.data_dir);
+        std::fs::write(&version_file, version)
+            .map_err(|e| Self::data_error(format!("Failed to write version file: {e}")))?;
+        Ok(())
+    }
+
+    /// Get GitHub release asset URL for a component.
+    #[cfg(feature = "runtime-data")]
+    fn get_release_asset_url(&self, component: DataComponent) -> String {
+        let info = get_component_info(component);
+        format!("{}/{}/{}", LIBPOSTAL_BASE_URL, info.version, info.filename)
+    }
+
+    /// Download a file in multiple chunks using HTTP Range requests.
+    #[cfg(feature = "runtime-data")]
+    async fn download_release_multipart(&self, url: &str, filename: &Path, num_chunks: usize) -> Result<()> {
+        println!("Downloading multipart: {}, num_chunks={}", url, num_chunks);
+        
+        let chunk_size = self.config.chunk_size;
+        let mut download_tasks = Vec::new();
+
+        // Create tasks for each chunk
+        for i in 0..num_chunks {
+            let chunk_url = url.to_string();
+            let chunk_filename = filename.with_extension(format!("part{}", i + 1));
+            let offset = i * chunk_size;
+            let max_range = offset + chunk_size - 1;
+            
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(self.config.chunk_timeout_seconds))
+                .build()
+                .map_err(|e| Self::data_error(format!("Failed to create HTTP client: {e}")))?;
+
+            let task = tokio::spawn(async move {
+                println!("Downloading part {}: filename={}, offset={}, max={}", 
+                    i + 1, chunk_filename.display(), offset, max_range);
+
+                let mut retries = 0;
+                const MAX_RETRIES: usize = 3;
+
+                while retries < MAX_RETRIES {
+                    let result = client
+                        .get(&chunk_url)
+                        .header("Range", format!("bytes={}-{}", offset, max_range))
+                        .send()
+                        .await;
+
+                    match result {
+                        Ok(response) => {
+                            if response.status().is_success() || response.status() == 206 {
+                                let bytes = response.bytes().await
+                                    .map_err(|e| format!("Failed to read response: {e}"))?;
+                                
+                                std::fs::write(&chunk_filename, &bytes)
+                                    .map_err(|e| format!("Failed to write chunk: {e}"))?;
+                                
+                                return Ok::<(), String>(());
+                            } else {
+                                return Err(format!("HTTP error: {}", response.status()));
+                            }
+                        }
+                        Err(e) => {
+                            retries += 1;
+                            if retries >= MAX_RETRIES {
+                                return Err(format!("Failed after {} retries: {e}", MAX_RETRIES));
+                            }
+                            tokio::time::sleep(Duration::from_secs(2_u64.pow(retries as u32))).await;
+                        }
+                    }
+                }
+                Err("Max retries exceeded".to_string())
+            });
+
+            download_tasks.push(task);
+        }
+
+        // Wait for all downloads to complete
+        let results = future::join_all(download_tasks).await;
+        
+        // Check for errors
+        for (i, result) in results.into_iter().enumerate() {
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(Self::data_error(format!("Chunk {} failed: {e}", i + 1))),
+                Err(e) => return Err(Self::data_error(format!("Task {} panicked: {e}", i + 1))),
+            }
+        }
+
+        // Reassemble the file
+        let mut output_file = std::fs::File::create(filename)
+            .map_err(|e| Self::data_error(format!("Failed to create output file: {e}")))?;
+
+        for i in 0..num_chunks {
+            let chunk_filename = filename.with_extension(format!("part{}", i + 1));
+            let chunk_data = std::fs::read(&chunk_filename)
+                .map_err(|e| Self::data_error(format!("Failed to read chunk {}: {e}", i + 1)))?;
+            
+            output_file.write_all(&chunk_data)
+                .map_err(|e| Self::data_error(format!("Failed to write to output file: {e}")))?;
+            
+            // Clean up chunk file
+            std::fs::remove_file(&chunk_filename).ok();
+        }
+
+        println!("Multipart download completed: {}", filename.display());
+        Ok(())
+    }
+
+    /// Download a single component.
+    #[cfg(feature = "runtime-data")]
+    async fn download_component(&self, component: DataComponent) -> Result<()> {
+        let info = get_component_info(component);
+        let url = self.get_release_asset_url(component);
+        let local_path = self.data_dir.join(&info.filename);
+
+        // Check if update is needed
+        let current_version = self.check_component_version(component)?;
+        if let Some(current) = current_version {
+            if current == info.version {
+                println!("libpostal {} up to date", info.name);
+                return Ok(());
+            }
+        }
+
+        println!("New libpostal {} available", info.name);
+
+        // Download the file
+        if info.num_chunks > 1 {
+            self.download_release_multipart(&url, &local_path, info.num_chunks).await?;
+        } else {
+            // Single file download
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(self.config.timeout_seconds))
+                .build()
+                .map_err(|e| Self::data_error(format!("Failed to create HTTP client: {e}")))?;
+
+            let response = client.get(&url).send().await
+                .map_err(|e| Self::data_error(format!("Failed to download {}: {e}", url)))?;
+
+            if !response.status().is_success() {
+                return Err(Self::data_error(format!("Download failed with status: {}", response.status())));
+            }
+
+            let bytes = response.bytes().await
+                .map_err(|e| Self::data_error(format!("Failed to read response: {e}")))?;
+
+            std::fs::write(&local_path, &bytes)
+                .map_err(|e| Self::data_error(format!("Failed to write file: {e}")))?;
+        }
+
+        // Remove old subdirectories
+        for subdir in &info.subdirs {
+            let path = self.data_dir.join(subdir);
+            if path.exists() {
+                std::fs::remove_dir_all(&path)
+                    .map_err(|e| Self::data_error(format!("Failed to remove {}: {e}", path.display())))?;
+            }
+        }
+
+        // Extract the archive
+        self.extract_tar_gz(&local_path)?;
+
+        // Clean up downloaded file
+        std::fs::remove_file(&local_path).ok();
+
+        // Write version file
+        self.write_version_file(component, &info.version)?;
+
+        println!("libpostal {} updated successfully", info.name);
+        Ok(())
+    }
+
     /// Ensure data is available, downloading if necessary.
     #[cfg(feature = "runtime-data")]
     pub async fn ensure_data(&self) -> Result<()> {
@@ -248,7 +501,7 @@ impl DataManager {
         Ok(())
     }
 
-    /// Download real libpostal data files
+    /// Download real libpostal data files using native Rust implementation
     #[cfg(feature = "runtime-data")]
     async fn download_real_data(&self) -> Result<()> {
         // Create data directory
@@ -256,234 +509,21 @@ impl DataManager {
 
         println!("Setting up libpostal data files...");
 
-        // Try download strategies in order of preference
-        if let Ok(()) = self.download_with_libpostal_data().await {
-            println!("Successfully downloaded data using libpostal_data command");
-            return Ok(());
-        }
-
-        if let Ok(()) = self.copy_from_system_libpostal().await {
-            println!("Successfully downloaded data using system installation");
-            return Ok(());
-        }
-
-        if let Ok(()) = self.copy_from_project_data().await {
-            println!("Successfully downloaded data using project directory");
-            return Ok(());
-        }
-
-        if let Ok(()) = self.download_from_official_sources().await {
-            println!("Successfully downloaded data using official sources");
-            return Ok(());
-        }
-
-        // All strategies failed
-        Err(Self::data_error(
-            "Could not find or download libpostal data files.\n\
-            \n\
-            To resolve this issue, try one of the following:\n\
-            \n\
-            1. Install libpostal system-wide:\n\
-               https://github.com/openvenues/libpostal#installation-maclinux\n\
-            \n\
-            2. Set LIBPOSTAL_DATA_DIR environment variable:\n\
-               export LIBPOSTAL_DATA_DIR=/path/to/libpostal/data\n\
-            \n\
-            3. Copy data files manually to: ~/.cache/libpostal-rs/\n\
-            \n\
-            4. Run the setup script: ./scripts/setup-data.sh",
-        ))
+        // Try native component-based download first
+        self.download_native_components().await
     }
 
-    /// Try to download data using libpostal_data command
+    /// Download all components using the native Rust implementation.
     #[cfg(feature = "runtime-data")]
-    async fn download_with_libpostal_data(&self) -> Result<()> {
-        // First try to find the libpostal_data executable that was built during compilation
-        let libpostal_data_path = self.find_embedded_libpostal_data()?;
+    async fn download_native_components(&self) -> Result<()> {
+        // Download base data files
+        self.download_component(DataComponent::Base).await?;
         
-        println!("Found embedded libpostal_data at: {}", libpostal_data_path.display());
-        println!("Downloading data files...");
-        println!("This may take a while as the data files are large (~1GB)");
-
-        let output = std::process::Command::new(&libpostal_data_path)
-            .arg("download")
-            .arg("all")
-            .arg(&self.data_dir)
-            .output()
-            .map_err(|e| {
-                crate::error::Error::data_error(format!("Failed to run libpostal_data: {e}"))
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            return Err(crate::error::Error::data_error(format!(
-                "libpostal_data failed:\nstdout: {stdout}\nstderr: {stderr}"
-            )));
-        }
-
-        println!("Data download completed successfully");
-        Ok(())
-    }
-
-    /// Find the embedded libpostal_data executable that was built during compilation
-    #[cfg(feature = "runtime-data")]
-    fn find_embedded_libpostal_data(&self) -> Result<PathBuf> {
-        // Try in order of preference
-        let candidates = [
-            self.try_executable_from_env(),
-            self.try_executable_from_project_root(),
-            self.try_executable_from_build_dir(),
-            self.try_system_executable(),
-        ];
-
-        for candidate in candidates.into_iter().flatten() {
-            if candidate.exists() && candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
+        // Download parser model
+        self.download_component(DataComponent::Parser).await?;
         
-        Err(crate::error::Error::data_error(
-            "Could not find libpostal_data executable. This should have been built during compilation.\n\
-            Try running 'cargo build' first to ensure libpostal is properly compiled."
-        ))
-    }
-
-    /// Try to get executable path from environment variable
-    #[cfg(feature = "runtime-data")]
-    fn try_executable_from_env(&self) -> Option<PathBuf> {
-        option_env!("LIBPOSTAL_DATA_EXECUTABLE").map(PathBuf::from)
-    }
-
-    /// Try to get executable from project root
-    #[cfg(feature = "runtime-data")]
-    fn try_executable_from_project_root(&self) -> Option<PathBuf> {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        Some(std::path::Path::new(manifest_dir).join("libpostal_data"))
-    }
-
-    /// Try to find executable in build directory
-    #[cfg(feature = "runtime-data")]
-    fn try_executable_from_build_dir(&self) -> Option<PathBuf> {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let target_dir = std::path::Path::new(manifest_dir).join("target");
-        
-        let search_patterns = [
-            "debug/build/libpostal-rs-*/out/libpostal-install/bin/libpostal_data",
-            "release/build/libpostal-rs-*/out/libpostal-install/bin/libpostal_data",
-            "debug/build/libpostal-rs-*/out/libpostal_data",
-            "release/build/libpostal-rs-*/out/libpostal_data",
-        ];
-        
-        for pattern in &search_patterns {
-            if let Some(path) = self.find_file_with_pattern(&target_dir, pattern) {
-                return Some(path);
-            }
-        }
-        
-        None
-    }
-
-    /// Try to use system libpostal_data
-    #[cfg(feature = "runtime-data")]
-    fn try_system_executable(&self) -> Option<PathBuf> {
-        std::process::Command::new("libpostal_data")
-            .arg("--help")
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|_| PathBuf::from("libpostal_data"))
-    }
-
-    /// Find a file using a glob-like pattern
-    #[cfg(feature = "runtime-data")]
-    fn find_file_with_pattern(&self, base_dir: &Path, pattern: &str) -> Option<PathBuf> {
-        let pattern_path = base_dir.join(pattern);
-        
-        if let Some(parent) = pattern_path.parent()
-            && let Some(parent_parent) = parent.parent()
-            && let Ok(entries) = std::fs::read_dir(parent_parent) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() && path.file_name().unwrap().to_string_lossy().starts_with("libpostal-rs-") {
-                        let candidates = [
-                            path.join("out/libpostal-install/bin/libpostal_data"),
-                            path.join("out/libpostal_data"),
-                        ];
-                        
-                        for candidate in &candidates {
-                            if candidate.exists() && candidate.is_file() {
-                                return Some(candidate.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        
-        None
-    }
-
-    /// Try to download from official libpostal data sources
-    #[cfg(feature = "runtime-data")]
-    async fn download_from_official_sources(&self) -> Result<()> {
-        println!("Attempting to download from official libpostal data sources...");
-        println!("This may take a while as the data files are large (~1GB)");
-
-        for url in DEFAULT_DATA_URLS {
-            println!("Trying to download from: {url}");
-            match self.download_and_extract_data(url).await {
-                Ok(()) => {
-                    println!("Successfully downloaded and extracted data");
-                    return Ok(());
-                }
-                Err(e) => {
-                    println!("Failed to download from {url}: {e}");
-                    continue;
-                }
-            }
-        }
-
-        Err(Self::data_error("All download sources failed"))
-    }
-
-    /// Download and extract data archive
-    #[cfg(feature = "runtime-data")]
-    async fn download_and_extract_data(&self, url: &str) -> Result<()> {
-        use std::fs;
-        use std::io::Write;
-
-        let response = reqwest::get(url).await.map_err(|e| {
-            crate::error::Error::data_error(format!("Failed to download data: {e}"))
-        })?;
-
-        if !response.status().is_success() {
-            return Err(crate::error::Error::data_error(format!(
-                "Download failed with status: {}",
-                response.status()
-            )));
-        }
-
-        let content = response.bytes().await.map_err(|e| {
-            crate::error::Error::data_error(format!("Failed to read response: {e}"))
-        })?;
-
-        println!("Downloaded {} bytes, extracting...", content.len());
-
-        // Save to archive file
-        let archive_path = self.data_dir.join("data.tar.gz");
-        let mut file = fs::File::create(&archive_path).map_err(|e| {
-            crate::error::Error::data_error(format!("Failed to create archive file: {e}"))
-        })?;
-
-        file.write_all(&content).map_err(|e| {
-            crate::error::Error::data_error(format!("Failed to write archive file: {e}"))
-        })?;
-
-        // Extract the archive
-        self.extract_tar_gz(&archive_path)?;
-
-        // Clean up archive file
-        fs::remove_file(&archive_path).ok();
+        // Download language classifier model
+        self.download_component(DataComponent::LanguageClassifier).await?;
 
         Ok(())
     }
@@ -504,76 +544,6 @@ impl DataManager {
         archive.unpack(&self.data_dir).map_err(|e| {
             crate::error::Error::data_error(format!("Failed to extract archive: {e}"))
         })?;
-
-        Ok(())
-    }
-
-    /// Try to copy data from system libpostal installation
-    #[cfg(feature = "runtime-data")]
-    async fn copy_from_system_libpostal(&self) -> Result<()> {
-        for path in SYSTEM_DATA_PATHS {
-            let system_data_dir = std::path::PathBuf::from(path);
-            if system_data_dir.exists() && self.validate_data_dir(&system_data_dir) {
-                return self.copy_data_directory(&system_data_dir).await;
-            }
-        }
-
-        Err(Self::data_error("No system libpostal installation found"))
-    }
-
-    /// Try to copy data from project directory (for development)
-    #[cfg(feature = "runtime-data")]
-    async fn copy_from_project_data(&self) -> Result<()> {
-        for path in PROJECT_DATA_PATHS {
-            let project_data_dir = std::path::PathBuf::from(path);
-            if project_data_dir.exists() && self.validate_data_dir(&project_data_dir) {
-                return self.copy_data_directory(&project_data_dir).await;
-            }
-        }
-
-        Err(Self::data_error("No project data directory found"))
-    }
-
-    /// Validate that a directory contains the expected libpostal data structure
-    fn validate_data_dir(&self, dir: &std::path::Path) -> bool {
-        MINIMAL_DATA_FILES.iter().all(|file| {
-            dir.join(file).exists()
-        })
-    }
-
-    /// Copy data directory from source to target
-    #[cfg(feature = "runtime-data")]
-    async fn copy_data_directory(&self, source_dir: &std::path::Path) -> Result<()> {
-        use std::fs;
-
-        println!("Copying data from: {}", source_dir.display());
-
-        // Use std::process::Command to run cp -r for efficiency
-        let output = std::process::Command::new("cp")
-            .arg("-r")
-            .arg(source_dir)
-            .arg(self.data_dir.parent().unwrap()) // Copy to parent, then rename
-            .output()
-            .map_err(|e| crate::error::Error::data_error(format!("Failed to copy data: {e}")))?;
-
-        if !output.status.success() {
-            return Err(crate::error::Error::data_error(format!(
-                "Copy failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-
-        // Rename to correct directory name if needed
-        let copied_dir = self
-            .data_dir
-            .parent()
-            .unwrap()
-            .join(source_dir.file_name().unwrap());
-        if copied_dir != self.data_dir {
-            fs::rename(&copied_dir, &self.data_dir).map_err(|e| {
-                crate::error::Error::data_error(format!("Failed to rename data directory: {e}"))
-            })?;
-        }
 
         Ok(())
     }
@@ -631,6 +601,14 @@ pub struct DataConfig {
     pub base_url: String,
     /// Connection timeout for downloads
     pub timeout_seconds: u64,
+    /// Number of parallel download workers (default: 12)
+    pub download_workers: usize,
+    /// Chunk size for multipart downloads (default: 64MB)
+    pub chunk_size: usize,
+    /// Number of retry attempts for failed downloads (default: 3)
+    pub max_retries: usize,
+    /// Timeout for individual chunk downloads (default: 30s)
+    pub chunk_timeout_seconds: u64,
 }
 
 impl Default for DataConfig {
@@ -641,6 +619,10 @@ impl Default for DataConfig {
             verify_integrity: true,
             base_url: "https://github.com/openvenues/libpostal/releases/download/v1.1/".to_string(),
             timeout_seconds: 300, // 5 minutes
+            download_workers: DEFAULT_NUM_WORKERS,
+            chunk_size: CHUNK_SIZE,
+            max_retries: 3,
+            chunk_timeout_seconds: 30,
         }
     }
 }
